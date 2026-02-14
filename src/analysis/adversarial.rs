@@ -23,7 +23,8 @@ pub fn detect_gaming_signals(
             merge_signal(&mut signals_by_key, signal, min_confidence);
         }
         if let Some(flow) = stake_flows.get(vote_pubkey.as_str()) {
-            if let Some(signal) = detect_self_stake_inflation(vote_pubkey, history, flow, latest_epoch)
+            if let Some(signal) =
+                detect_self_stake_inflation(vote_pubkey, history, flow, latest_epoch)
             {
                 merge_signal(&mut signals_by_key, signal, min_confidence);
             }
@@ -81,8 +82,8 @@ fn detect_commission_sniping(
             }
             let stake_gain =
                 (history[next_index].activated_stake_sol - curr.activated_stake_sol).max(0.0);
-            let confidence = (0.55 + ((drop + rebound) as f64 / 20.0) + (stake_gain / 200_000.0))
-                .min(0.96);
+            let confidence =
+                (0.55 + ((drop + rebound) as f64 / 20.0) + (stake_gain / 200_000.0)).min(0.96);
             return Some(GamingSignal {
                 vote_pubkey: vote_pubkey.to_string(),
                 signal_type: GamingType::CommissionSniping,
@@ -153,7 +154,12 @@ fn detect_self_stake_inflation(
         .take(4)
         .last()
         .map(|snapshot| snapshot.activated_stake_sol)
-        .unwrap_or_else(|| history.first().map(|snapshot| snapshot.activated_stake_sol).unwrap_or(0.0));
+        .unwrap_or_else(|| {
+            history
+                .first()
+                .map(|snapshot| snapshot.activated_stake_sol)
+                .unwrap_or(0.0)
+        });
 
     let recent_growth = (latest.activated_stake_sol - baseline).max(0.0);
     let growth_ratio = if baseline > 0.0 {
@@ -220,10 +226,9 @@ fn detect_sybil_clusters(stake_flows: &HashMap<&str, StakeFlowSummary>) -> Vec<G
         if combined_stake < 10_000.0 {
             continue;
         }
-        let confidence = (0.55
-            + (unique_votes.len() as f64 / 10.0)
-            + (combined_stake / 1_000_000.0).min(0.2))
-        .min(0.97);
+        let confidence =
+            (0.55 + (unique_votes.len() as f64 / 10.0) + (combined_stake / 1_000_000.0).min(0.2))
+                .min(0.97);
 
         for vote in &unique_votes {
             signals.push(GamingSignal {
@@ -236,7 +241,10 @@ fn detect_sybil_clusters(stake_flows: &HashMap<&str, StakeFlowSummary>) -> Vec<G
                         authority,
                         unique_votes.len()
                     ),
-                    format!("Cluster combined delegated stake: {:.0} SOL", combined_stake),
+                    format!(
+                        "Cluster combined delegated stake: {:.0} SOL",
+                        combined_stake
+                    ),
                     format!("Cluster peers: {}", unique_votes.join(", ")),
                 ],
                 first_detected_epoch: 0,
@@ -302,7 +310,13 @@ mod tests {
     use super::*;
     use crate::rpc::StakeAccountRecord;
 
-    fn snap(vote: &str, identity: &str, epoch: u64, stake: f64, commission: u8) -> ValidatorSnapshot {
+    fn snap(
+        vote: &str,
+        identity: &str,
+        epoch: u64,
+        stake: f64,
+        commission: u8,
+    ) -> ValidatorSnapshot {
         ValidatorSnapshot {
             vote_pubkey: vote.to_string(),
             identity: identity.to_string(),

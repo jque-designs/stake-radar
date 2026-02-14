@@ -192,7 +192,8 @@ async fn main() -> Result<()> {
             for pool_id in pools {
                 match pools::fetch_pool_scores(pool_id, &http).await {
                     Ok(scores) => {
-                        let prior_rank = store.load_prior_queue_rank(pool_id, &your_validator, epoch)?;
+                        let prior_rank =
+                            store.load_prior_queue_rank(pool_id, &your_validator, epoch)?;
                         store.insert_pool_rankings(epoch, pool_id, &scores)?;
                         if let Some(position) =
                             infer_queue_position(&your_validator, pool_id, &scores, prior_rank)

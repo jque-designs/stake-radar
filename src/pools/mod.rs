@@ -195,8 +195,10 @@ fn parse_validator_score(value: &Value, source: &str, weights: ScoreWeights) -> 
     )
     .unwrap_or(0.0);
     let commission_pct = pick_f64(obj, &["commission", "commissionPct", "validatorCommission"]);
-    let performance_score =
-        pick_f64(obj, &["performance", "performanceScore", "uptime", "apy", "yield"]);
+    let performance_score = pick_f64(
+        obj,
+        &["performance", "performanceScore", "uptime", "apy", "yield"],
+    );
     let decentralization_score = pick_f64(
         obj,
         &[

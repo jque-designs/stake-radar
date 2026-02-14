@@ -89,9 +89,11 @@ fn parse_stake_account_entry(entry: &Value) -> Option<StakeAccountRecord> {
 
 fn value_to_u64(value: Option<&Value>) -> Option<u64> {
     match value {
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .or_else(|| number.as_i64().and_then(|v| if v >= 0 { Some(v as u64) } else { None })),
+        Some(Value::Number(number)) => number.as_u64().or_else(|| {
+            number
+                .as_i64()
+                .and_then(|v| if v >= 0 { Some(v as u64) } else { None })
+        }),
         Some(Value::String(text)) => text.parse::<u64>().ok(),
         _ => None,
     }
