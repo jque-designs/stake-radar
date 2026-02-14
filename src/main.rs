@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use stake_radar::alert::engine::run_alert_engine;
 use stake_radar::analysis;
-use stake_radar::analysis::opportunity::detect_decay_opportunities;
+use stake_radar::analysis::opportunity::detect_decay_opportunities_with_flow;
 use stake_radar::analysis::queue::infer_queue_position;
 use stake_radar::analysis::threat::analyze_threats;
 use stake_radar::config::{AppConfig, ConfigOverrides};
@@ -15,7 +15,7 @@ use stake_radar::models::StakePoolId;
 use stake_radar::output;
 use stake_radar::pools;
 use stake_radar::rpc::{RpcClient, StakeAccountRecord};
-use stake_radar::snapshot::SnapshotStore;
+use stake_radar::snapshot::{compute_stake_flow_diffs, summarize_flow_pressure, SnapshotStore, StakeFlowDiff};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -168,7 +168,15 @@ async fn main() -> Result<()> {
             let (epochs, histories) = load_histories(&store, lookback)?;
             ensure_non_empty_epochs(&epochs)?;
             let min_stake = min_stake.unwrap_or(config.analysis.min_opportunity_stake_sol);
-            let mut opportunities = detect_decay_opportunities(&histories, min_stake);
+            let epoch_from = *epochs.last().unwrap_or(&0);
+            let epoch_to = *epochs.first().unwrap_or(&0);
+            let flow_pressure = load_stake_flow_diffs_for_epochs(&store, epoch_from, epoch_to)?
+                .map(|stake_diffs| summarize_flow_pressure(&stake_diffs));
+            let mut opportunities = detect_decay_opportunities_with_flow(
+                &histories,
+                min_stake,
+                flow_pressure.as_ref(),
+            );
             if let Some(cause_filter) = cause {
                 let filter_set = parse_csv_set(&cause_filter);
                 opportunities.retain(|opportunity| {
@@ -176,8 +184,6 @@ async fn main() -> Result<()> {
                 });
             }
 
-            let epoch_from = *epochs.last().unwrap_or(&0);
-            let epoch_to = *epochs.first().unwrap_or(&0);
             render_opportunities(&cli.output, &opportunities, epoch_from, epoch_to)?;
         }
         Command::Queue { pool } => {
@@ -235,12 +241,24 @@ async fn main() -> Result<()> {
             let to_epoch = *epochs.first().expect("len checked");
             let from_snapshots = store.load_epoch_snapshots(from_epoch)?;
             let to_snapshots = store.load_epoch_snapshots(to_epoch)?;
-            let mut flows = analysis::cohort::compute_cohort_flows(
-                from_epoch,
-                to_epoch,
-                &from_snapshots,
-                &to_snapshots,
-            );
+            let mut flows = if let Some(stake_diffs) =
+                load_stake_flow_diffs_for_epochs(&store, from_epoch, to_epoch)?
+            {
+                analysis::cohort::compute_cohort_flows_from_stake_diffs(
+                    from_epoch,
+                    to_epoch,
+                    &from_snapshots,
+                    &to_snapshots,
+                    &stake_diffs,
+                )
+            } else {
+                analysis::cohort::compute_cohort_flows(
+                    from_epoch,
+                    to_epoch,
+                    &from_snapshots,
+                    &to_snapshots,
+                )
+            };
             if let Some(from_filter) = from {
                 let from_filter = from_filter.to_ascii_lowercase();
                 flows.retain(|flow| flow.from_cohort.to_string().contains(&from_filter));
@@ -272,9 +290,15 @@ async fn main() -> Result<()> {
                     &your_validator,
                     config.analysis.threat_overtake_horizon_epochs,
                 );
-                let opportunities = detect_decay_opportunities(
+                let recent_epochs = store.recent_epochs(lookback)?;
+                let epoch_from = recent_epochs.last().copied().unwrap_or(0);
+                let epoch_to = recent_epochs.first().copied().unwrap_or(0);
+                let flow_pressure = load_stake_flow_diffs_for_epochs(&store, epoch_from, epoch_to)?
+                    .map(|stake_diffs| summarize_flow_pressure(&stake_diffs));
+                let opportunities = detect_decay_opportunities_with_flow(
                     &histories,
                     config.analysis.min_opportunity_stake_sol,
+                    flow_pressure.as_ref(),
                 );
                 let stake_accounts = load_or_fetch_latest_stake_accounts(&rpc, &mut store).await?;
                 let signals = analysis::adversarial::detect_gaming_signals(
@@ -452,6 +476,36 @@ async fn load_or_fetch_latest_stake_accounts(
         let _ = store.insert_stake_accounts(epoch, &fetched);
     }
     Ok(fetched)
+}
+
+fn load_stake_flow_diffs_for_epochs(
+    store: &SnapshotStore,
+    epoch_from: u64,
+    epoch_to: u64,
+) -> Result<Option<Vec<StakeFlowDiff>>> {
+    let Some(stake_from_epoch) = store.latest_stake_epoch_at_or_before(epoch_from)? else {
+        return Ok(None);
+    };
+    let Some(stake_to_epoch) = store.latest_stake_epoch_at_or_before(epoch_to)? else {
+        return Ok(None);
+    };
+    if stake_from_epoch >= stake_to_epoch {
+        return Ok(None);
+    }
+
+    let from_accounts = store.load_stake_accounts_for_epoch(stake_from_epoch)?;
+    let to_accounts = store.load_stake_accounts_for_epoch(stake_to_epoch)?;
+    if from_accounts.is_empty() || to_accounts.is_empty() {
+        return Ok(None);
+    }
+
+    let diffs = compute_stake_flow_diffs(
+        stake_from_epoch,
+        stake_to_epoch,
+        &from_accounts,
+        &to_accounts,
+    );
+    Ok(Some(diffs))
 }
 
 fn render_threats(

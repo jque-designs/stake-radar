@@ -268,6 +268,36 @@ impl SnapshotStore {
         self.load_stake_accounts_for_epoch(i64_to_u64(latest_epoch))
     }
 
+    pub fn recent_stake_epochs(&self, limit: u32) -> Result<Vec<u64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT epoch FROM stake_account_snapshots ORDER BY epoch DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![i64::from(limit)], |row| row.get::<_, i64>(0))?;
+        let mut epochs = Vec::new();
+        for row in rows {
+            epochs.push(i64_to_u64(row?));
+        }
+        Ok(epochs)
+    }
+
+    pub fn latest_stake_epoch_at_or_before(&self, epoch: u64) -> Result<Option<u64>> {
+        let result = self
+            .conn
+            .query_row(
+                "
+                SELECT epoch
+                FROM stake_account_snapshots
+                WHERE epoch <= ?1
+                ORDER BY epoch DESC
+                LIMIT 1
+                ",
+                params![u64_to_i64(epoch)],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok();
+        Ok(result.map(i64_to_u64))
+    }
+
     pub fn load_stake_accounts_for_epoch(&self, epoch: u64) -> Result<Vec<StakeAccountRecord>> {
         let mut stmt = self.conn.prepare(
             "

@@ -1,9 +1,18 @@
 use crate::models::{CaptureDifficulty, DecayCause, DecayOpportunity, ValidatorSnapshot};
+use crate::snapshot::ValidatorFlowPressure;
 use std::collections::HashMap;
 
 pub fn detect_decay_opportunities(
     histories: &HashMap<String, Vec<ValidatorSnapshot>>,
     min_stake_lost_sol: f64,
+) -> Vec<DecayOpportunity> {
+    detect_decay_opportunities_with_flow(histories, min_stake_lost_sol, None)
+}
+
+pub fn detect_decay_opportunities_with_flow(
+    histories: &HashMap<String, Vec<ValidatorSnapshot>>,
+    min_stake_lost_sol: f64,
+    flow_pressure: Option<&HashMap<String, ValidatorFlowPressure>>,
 ) -> Vec<DecayOpportunity> {
     let mut opportunities = Vec::new();
 
@@ -47,12 +56,24 @@ pub fn detect_decay_opportunities(
             continue;
         }
 
+        let net_outbound = flow_pressure
+            .and_then(|pressure| pressure.get(vote_pubkey))
+            .map(ValidatorFlowPressure::net_outbound_sol)
+            .unwrap_or(0.0);
+        let pressure_ratio = if total_lost > 0.0 {
+            (net_outbound / total_lost).clamp(0.0, 2.0)
+        } else {
+            0.0
+        };
+
         let probable_cause = if delinquency_flag {
             DecayCause::Delinquency
         } else if commission_increase {
             DecayCause::CommissionIncrease
         } else if high_skip_rate {
             DecayCause::HighSkipRate
+        } else if net_outbound > min_stake_lost_sol * 0.5 {
+            DecayCause::StakePoolDelisting
         } else {
             DecayCause::Unknown
         };
@@ -61,8 +82,9 @@ pub fn detect_decay_opportunities(
         let orphan_factor = match probable_cause {
             DecayCause::CommissionIncrease | DecayCause::Delinquency => 0.85,
             DecayCause::HighSkipRate => 0.75,
+            DecayCause::StakePoolDelisting => 0.92,
             _ => 0.65,
-        };
+        } * (1.0 + 0.2 * pressure_ratio.min(1.0));
 
         let capture_difficulty = if latest.commission_pct <= 5 {
             CaptureDifficulty::Easy
@@ -132,5 +154,35 @@ mod tests {
             opportunities[0].probable_cause,
             DecayCause::CommissionIncrease
         );
+    }
+
+    #[test]
+    fn upgrades_cause_when_flow_pressure_is_high() {
+        let mut histories = HashMap::new();
+        histories.insert(
+            "vote".to_string(),
+            vec![
+                make_snapshot(1, 1000.0, 5, false),
+                make_snapshot(2, 900.0, 5, false),
+                make_snapshot(3, 820.0, 5, false),
+                make_snapshot(4, 740.0, 5, false),
+            ],
+        );
+        let mut flow_pressure = HashMap::new();
+        flow_pressure.insert(
+            "vote".to_string(),
+            ValidatorFlowPressure {
+                outbound_sol: 280.0,
+                inbound_sol: 0.0,
+                reallocated_outbound_sol: 260.0,
+                entered_sol: 0.0,
+                exited_sol: 280.0,
+            },
+        );
+        let opportunities =
+            detect_decay_opportunities_with_flow(&histories, 100.0, Some(&flow_pressure));
+        assert_eq!(opportunities.len(), 1);
+        assert_eq!(opportunities[0].probable_cause, DecayCause::StakePoolDelisting);
+        assert!(opportunities[0].estimated_orphan_stake_sol > 200.0);
     }
 }
