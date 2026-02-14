@@ -6,7 +6,9 @@ use crate::config::AppConfig;
 use crate::models::{CohortFlow, DecayOpportunity, PoolQueuePosition, StakePoolId, ThreatProfile};
 use crate::pools;
 use crate::rpc::RpcClient;
-use crate::snapshot::{compute_stake_flow_diffs, summarize_flow_pressure, SnapshotStore, StakeFlowDiff};
+use crate::snapshot::{
+    compute_stake_flow_diffs, summarize_flow_pressure, SnapshotStore, StakeFlowDiff,
+};
 use anyhow::{Context, Result};
 use axum::extract::{Query, State};
 use axum::http::{Method, StatusCode};
@@ -384,31 +386,31 @@ async fn cohorts_handler(
         .load_epoch_snapshots(epoch_to)
         .map_err(ApiError::internal)?;
 
-    let (mut flows, used_stake_flow_diffs) =
-        if let Some(stake_diffs) = load_stake_flow_diffs_for_epochs(&store, epoch_from, epoch_to)
+    let (mut flows, used_stake_flow_diffs) = if let Some(stake_diffs) =
+        load_stake_flow_diffs_for_epochs(&store, epoch_from, epoch_to)
             .map_err(ApiError::internal)?
-        {
-            (
-                analysis::cohort::compute_cohort_flows_from_stake_diffs(
-                    epoch_from,
-                    epoch_to,
-                    &from_snapshots,
-                    &to_snapshots,
-                    &stake_diffs,
-                ),
-                true,
-            )
-        } else {
-            (
-                analysis::cohort::compute_cohort_flows(
-                    epoch_from,
-                    epoch_to,
-                    &from_snapshots,
-                    &to_snapshots,
-                ),
-                false,
-            )
-        };
+    {
+        (
+            analysis::cohort::compute_cohort_flows_from_stake_diffs(
+                epoch_from,
+                epoch_to,
+                &from_snapshots,
+                &to_snapshots,
+                &stake_diffs,
+            ),
+            true,
+        )
+    } else {
+        (
+            analysis::cohort::compute_cohort_flows(
+                epoch_from,
+                epoch_to,
+                &from_snapshots,
+                &to_snapshots,
+            ),
+            false,
+        )
+    };
 
     if let Some(from_filter) = query.from {
         let from_filter = from_filter.to_ascii_lowercase();
