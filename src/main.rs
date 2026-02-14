@@ -91,6 +91,10 @@ enum Command {
         #[arg(long = "max-cycles")]
         max_cycles: Option<u32>,
     },
+    Serve {
+        #[arg(long = "port", default_value_t = 3001)]
+        port: u16,
+    },
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -331,6 +335,9 @@ async fn main() -> Result<()> {
                 }
                 tokio::time::sleep(Duration::from_secs(interval_seconds)).await;
             }
+        }
+        Command::Serve { port } => {
+            stake_radar::api::serve(config.clone(), port).await?;
         }
         Command::Config { .. } => unreachable!("config command handled earlier"),
     }

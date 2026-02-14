@@ -1,3 +1,4 @@
+pub mod api;
 pub mod alert;
 pub mod analysis;
 pub mod config;
