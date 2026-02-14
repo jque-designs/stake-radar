@@ -14,7 +14,7 @@ use stake_radar::config::{AppConfig, ConfigOverrides};
 use stake_radar::models::StakePoolId;
 use stake_radar::output;
 use stake_radar::pools;
-use stake_radar::rpc::RpcClient;
+use stake_radar::rpc::{RpcClient, StakeAccountRecord};
 use stake_radar::snapshot::SnapshotStore;
 
 #[derive(Debug, Parser)]
@@ -79,7 +79,10 @@ enum Command {
         #[arg(long = "to")]
         to: Option<String>,
     },
-    Snapshot,
+    Snapshot {
+        #[arg(long = "include-stake-accounts", default_value_t = false)]
+        include_stake_accounts: bool,
+    },
     Watch {
         #[arg(long = "interval-seconds", default_value_t = 60)]
         interval_seconds: u64,
@@ -124,9 +127,17 @@ async fn main() -> Result<()> {
     let lookback = cli.epochs.unwrap_or(config.analysis.lookback_epochs);
 
     match cli.command {
-        Command::Snapshot => {
-            let (epoch, rows) = capture_snapshot(&rpc, &mut store).await?;
-            println!("Captured {rows} validator snapshots for epoch {epoch}");
+        Command::Snapshot {
+            include_stake_accounts,
+        } => {
+            let capture = capture_snapshot(&rpc, &mut store, include_stake_accounts).await?;
+            println!(
+                "Captured {} validator snapshots for epoch {}",
+                capture.validator_rows, capture.epoch
+            );
+            if include_stake_accounts {
+                println!("Captured {} stake account snapshots", capture.stake_rows);
+            }
         }
         Command::Threats { tier } => {
             let your_validator = require_validator(&config)?;
@@ -172,12 +183,19 @@ async fn main() -> Result<()> {
         Command::Queue { pool } => {
             let your_validator = require_validator(&config)?;
             let pools = parse_pools(pool.as_deref().unwrap_or("marinade"))?;
+            let epoch = rpc
+                .get_epoch_info()
+                .await
+                .map(|info| info.epoch)
+                .unwrap_or_else(|_| store.latest_epoch().ok().flatten().unwrap_or(0));
             let mut positions = Vec::new();
             for pool_id in pools {
                 match pools::fetch_pool_scores(pool_id, &http).await {
                     Ok(scores) => {
+                        let prior_rank = store.load_prior_queue_rank(pool_id, &your_validator, epoch)?;
+                        store.insert_pool_rankings(epoch, pool_id, &scores)?;
                         if let Some(position) =
-                            infer_queue_position(&your_validator, pool_id, &scores, None)
+                            infer_queue_position(&your_validator, pool_id, &scores, prior_rank)
                         {
                             positions.push(position);
                         }
@@ -195,7 +213,12 @@ async fn main() -> Result<()> {
         Command::Gaming { confidence, .. } => {
             let (_, histories) = load_histories(&store, lookback)?;
             let threshold = confidence.unwrap_or(config.analysis.gaming_confidence_threshold);
-            let signals = analysis::adversarial::detect_gaming_signals(&histories, threshold);
+            let stake_accounts = load_or_fetch_latest_stake_accounts(&rpc, &mut store).await?;
+            let signals = analysis::adversarial::detect_gaming_signals(
+                &histories,
+                &stake_accounts,
+                threshold,
+            );
             render_gaming(&cli.output, &signals)?;
         }
         Command::Cohorts { from, to } => {
@@ -237,7 +260,7 @@ async fn main() -> Result<()> {
                 cycle += 1;
                 info!(cycle, "starting watch cycle");
                 if config.snapshot.auto_snapshot {
-                    if let Err(err) = capture_snapshot(&rpc, &mut store).await {
+                    if let Err(err) = capture_snapshot(&rpc, &mut store, true).await {
                         warn!("snapshot capture failed in watch mode: {err:#}");
                     }
                 }
@@ -252,8 +275,10 @@ async fn main() -> Result<()> {
                     &histories,
                     config.analysis.min_opportunity_stake_sol,
                 );
+                let stake_accounts = load_or_fetch_latest_stake_accounts(&rpc, &mut store).await?;
                 let signals = analysis::adversarial::detect_gaming_signals(
                     &histories,
+                    &stake_accounts,
                     config.analysis.gaming_confidence_threshold,
                 );
                 let queue_positions = Vec::new();
@@ -316,14 +341,41 @@ fn handle_config_command(
     Ok(())
 }
 
-async fn capture_snapshot(rpc: &RpcClient, store: &mut SnapshotStore) -> Result<(u64, usize)> {
+struct SnapshotCaptureResult {
+    epoch: u64,
+    validator_rows: usize,
+    stake_rows: usize,
+}
+
+async fn capture_snapshot(
+    rpc: &RpcClient,
+    store: &mut SnapshotStore,
+    include_stake_accounts: bool,
+) -> Result<SnapshotCaptureResult> {
     let epoch_info = rpc.get_epoch_info().await?;
     let snapshots = rpc
         .get_vote_snapshots(epoch_info.epoch, epoch_info.absolute_slot)
         .await
         .context("failed to fetch vote account snapshots")?;
-    let rows = store.insert_snapshots(&snapshots)?;
-    Ok((epoch_info.epoch, rows))
+    let validator_rows = store.insert_snapshots(&snapshots)?;
+
+    let stake_rows = if include_stake_accounts {
+        match rpc.get_stake_accounts().await {
+            Ok(stake_accounts) => store.insert_stake_accounts(epoch_info.epoch, &stake_accounts)?,
+            Err(err) => {
+                warn!("failed to fetch stake accounts during snapshot: {err:#}");
+                0
+            }
+        }
+    } else {
+        0
+    };
+
+    Ok(SnapshotCaptureResult {
+        epoch: epoch_info.epoch,
+        validator_rows,
+        stake_rows,
+    })
 }
 
 fn load_histories(
@@ -375,6 +427,30 @@ fn require_validator(config: &AppConfig) -> Result<String> {
         .vote_pubkey
         .clone()
         .ok_or_else(|| anyhow!("validator vote account required (--validator or config)"))
+}
+
+async fn load_or_fetch_latest_stake_accounts(
+    rpc: &RpcClient,
+    store: &mut SnapshotStore,
+) -> Result<Vec<StakeAccountRecord>> {
+    let existing = store.load_latest_stake_accounts()?;
+    if !existing.is_empty() {
+        return Ok(existing);
+    }
+
+    let epoch = rpc
+        .get_epoch_info()
+        .await
+        .map(|info| info.epoch)
+        .unwrap_or_else(|_| 0);
+    let fetched = rpc
+        .get_stake_accounts()
+        .await
+        .context("failed to fetch stake accounts from RPC")?;
+    if epoch > 0 {
+        let _ = store.insert_stake_accounts(epoch, &fetched);
+    }
+    Ok(fetched)
 }
 
 fn render_threats(

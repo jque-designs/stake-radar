@@ -1,4 +1,7 @@
+use crate::analysis::queue::{rank_scores, PoolScore};
+use crate::models::StakePoolId;
 use crate::models::ValidatorSnapshot;
+use crate::rpc::StakeAccountRecord;
 use crate::snapshot::migrations::run_migrations;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -196,6 +199,184 @@ impl SnapshotStore {
             snapshots.push(row?);
         }
         Ok(snapshots)
+    }
+
+    pub fn insert_stake_accounts(
+        &mut self,
+        epoch: u64,
+        records: &[StakeAccountRecord],
+    ) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let mut inserted = 0usize;
+        {
+            let mut stmt = tx.prepare(
+                "
+                INSERT INTO stake_account_snapshots (
+                    epoch,
+                    stake_pubkey,
+                    delegated_vote_pubkey,
+                    staker,
+                    withdrawer,
+                    delegated_stake_sol,
+                    activation_epoch,
+                    deactivation_epoch,
+                    state
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                ON CONFLICT(epoch, stake_pubkey) DO UPDATE SET
+                    delegated_vote_pubkey = excluded.delegated_vote_pubkey,
+                    staker = excluded.staker,
+                    withdrawer = excluded.withdrawer,
+                    delegated_stake_sol = excluded.delegated_stake_sol,
+                    activation_epoch = excluded.activation_epoch,
+                    deactivation_epoch = excluded.deactivation_epoch,
+                    state = excluded.state
+                ",
+            )?;
+
+            for record in records {
+                stmt.execute(params![
+                    u64_to_i64(epoch),
+                    &record.stake_pubkey,
+                    &record.delegated_vote_pubkey,
+                    &record.staker,
+                    &record.withdrawer,
+                    record.delegated_stake_sol,
+                    record.activation_epoch.map(u64_to_i64),
+                    record.deactivation_epoch.map(u64_to_i64),
+                    &record.state,
+                ])?;
+                inserted += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(inserted)
+    }
+
+    pub fn load_latest_stake_accounts(&self) -> Result<Vec<StakeAccountRecord>> {
+        let latest_epoch = self
+            .conn
+            .query_row(
+                "SELECT epoch FROM stake_account_snapshots ORDER BY epoch DESC LIMIT 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok();
+        let Some(latest_epoch) = latest_epoch else {
+            return Ok(Vec::new());
+        };
+        self.load_stake_accounts_for_epoch(i64_to_u64(latest_epoch))
+    }
+
+    pub fn load_stake_accounts_for_epoch(&self, epoch: u64) -> Result<Vec<StakeAccountRecord>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT
+                stake_pubkey,
+                delegated_vote_pubkey,
+                staker,
+                withdrawer,
+                delegated_stake_sol,
+                activation_epoch,
+                deactivation_epoch,
+                state
+            FROM stake_account_snapshots
+            WHERE epoch = ?1
+            ",
+        )?;
+        let rows = stmt.query_map(params![u64_to_i64(epoch)], |row| {
+            Ok(StakeAccountRecord {
+                stake_pubkey: row.get(0)?,
+                delegated_vote_pubkey: row.get(1)?,
+                staker: row.get(2)?,
+                withdrawer: row.get(3)?,
+                delegated_stake_sol: row.get(4)?,
+                activation_epoch: row.get::<_, Option<i64>>(5)?.map(i64_to_u64),
+                deactivation_epoch: row.get::<_, Option<i64>>(6)?.map(i64_to_u64),
+                state: row.get(7)?,
+            })
+        })?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn insert_pool_rankings(
+        &mut self,
+        epoch: u64,
+        pool: StakePoolId,
+        scores: &[PoolScore],
+    ) -> Result<()> {
+        let ranked = rank_scores(scores);
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "
+                INSERT INTO pool_queue_snapshots (
+                    epoch,
+                    pool,
+                    vote_pubkey,
+                    rank,
+                    score,
+                    delegated_stake_sol,
+                    projected_delegation_sol
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ON CONFLICT(epoch, pool, vote_pubkey) DO UPDATE SET
+                    rank = excluded.rank,
+                    score = excluded.score,
+                    delegated_stake_sol = excluded.delegated_stake_sol,
+                    projected_delegation_sol = excluded.projected_delegation_sol
+                ",
+            )?;
+
+            for (idx, score) in ranked.iter().enumerate() {
+                stmt.execute(params![
+                    u64_to_i64(epoch),
+                    pool.to_string(),
+                    &score.vote_pubkey,
+                    i64::try_from(idx + 1).unwrap_or(i64::MAX),
+                    score.score,
+                    score.delegated_stake_sol,
+                    score.projected_delegation_sol,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn load_prior_queue_rank(
+        &self,
+        pool: StakePoolId,
+        vote_pubkey: &str,
+        before_epoch: u64,
+    ) -> Result<Option<u32>> {
+        let rank = self
+            .conn
+            .query_row(
+                "
+                SELECT rank
+                FROM pool_queue_snapshots
+                WHERE pool = ?1
+                  AND vote_pubkey = ?2
+                  AND epoch < ?3
+                ORDER BY epoch DESC
+                LIMIT 1
+                ",
+                params![pool.to_string(), vote_pubkey, u64_to_i64(before_epoch)],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok();
+        Ok(rank.map(|value| {
+            if value < 1 {
+                1
+            } else {
+                value.min(u32::MAX as i64) as u32
+            }
+        }))
     }
 }
 

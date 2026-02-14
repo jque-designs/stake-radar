@@ -5,7 +5,10 @@ use reqwest::Client;
 pub async fn fetch_scores(client: &Client) -> Result<Vec<PoolScore>> {
     let url = "https://kobe.mainnet.jito.network/api/v1/validators";
     let payload = super::fetch_json(client, url).await?;
-    let mut scores = super::normalize_scores(&payload);
-    scores.sort_by(|a, b| b.score.total_cmp(&a.score));
-    Ok(scores)
+    let scores = super::normalize_scores(
+        &payload,
+        "jito",
+        super::ScoreWeights::new(0.50, 0.20, 0.15, 0.10, 0.05),
+    );
+    Ok(super::merge_scores(scores))
 }
