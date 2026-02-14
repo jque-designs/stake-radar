@@ -162,9 +162,7 @@ pub fn compute_stake_flow_diffs(
     diffs
 }
 
-pub fn summarize_flow_pressure(
-    diffs: &[StakeFlowDiff],
-) -> HashMap<String, ValidatorFlowPressure> {
+pub fn summarize_flow_pressure(diffs: &[StakeFlowDiff]) -> HashMap<String, ValidatorFlowPressure> {
     let mut pressure_by_vote = HashMap::<String, ValidatorFlowPressure>::new();
 
     for diff in diffs {
@@ -224,8 +222,8 @@ fn diff_existing_stake_account(
     let to_vote = to_record.delegated_vote_pubkey.as_deref();
     let from_stake = from_record.delegated_stake_sol.max(0.0);
     let to_stake = to_record.delegated_stake_sol.max(0.0);
-    let authority_changed = from_record.staker != to_record.staker
-        || from_record.withdrawer != to_record.withdrawer;
+    let authority_changed =
+        from_record.staker != to_record.staker || from_record.withdrawer != to_record.withdrawer;
 
     let mut diffs = Vec::new();
     if from_vote == to_vote {

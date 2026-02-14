@@ -156,13 +156,15 @@ pub fn compute_cohort_flows_from_stake_diffs(
 
     let mut flows = flow_map
         .into_iter()
-        .map(|((from_cohort, to_cohort), (flow_sol, delegator_count))| CohortFlow {
-            from_cohort,
-            to_cohort,
-            flow_sol,
-            epoch_range: (from_epoch, to_epoch),
-            delegator_count,
-        })
+        .map(
+            |((from_cohort, to_cohort), (flow_sol, delegator_count))| CohortFlow {
+                from_cohort,
+                to_cohort,
+                flow_sol,
+                epoch_range: (from_epoch, to_epoch),
+                delegator_count,
+            },
+        )
         .collect::<Vec<_>>();
     flows.sort_by(|a, b| b.flow_sol.total_cmp(&a.flow_sol));
     flows
@@ -226,13 +228,8 @@ mod tests {
             authority_changed: false,
         }];
 
-        let flows = compute_cohort_flows_from_stake_diffs(
-            100,
-            101,
-            &from_snapshots,
-            &to_snapshots,
-            &diffs,
-        );
+        let flows =
+            compute_cohort_flows_from_stake_diffs(100, 101, &from_snapshots, &to_snapshots, &diffs);
         assert_eq!(flows.len(), 1);
         assert_eq!(flows[0].flow_sol, 2_000.0);
         assert_eq!(flows[0].delegator_count, 1);

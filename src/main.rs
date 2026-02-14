@@ -15,7 +15,9 @@ use stake_radar::models::StakePoolId;
 use stake_radar::output;
 use stake_radar::pools;
 use stake_radar::rpc::{RpcClient, StakeAccountRecord};
-use stake_radar::snapshot::{compute_stake_flow_diffs, summarize_flow_pressure, SnapshotStore, StakeFlowDiff};
+use stake_radar::snapshot::{
+    compute_stake_flow_diffs, summarize_flow_pressure, SnapshotStore, StakeFlowDiff,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -172,11 +174,8 @@ async fn main() -> Result<()> {
             let epoch_to = *epochs.first().unwrap_or(&0);
             let flow_pressure = load_stake_flow_diffs_for_epochs(&store, epoch_from, epoch_to)?
                 .map(|stake_diffs| summarize_flow_pressure(&stake_diffs));
-            let mut opportunities = detect_decay_opportunities_with_flow(
-                &histories,
-                min_stake,
-                flow_pressure.as_ref(),
-            );
+            let mut opportunities =
+                detect_decay_opportunities_with_flow(&histories, min_stake, flow_pressure.as_ref());
             if let Some(cause_filter) = cause {
                 let filter_set = parse_csv_set(&cause_filter);
                 opportunities.retain(|opportunity| {

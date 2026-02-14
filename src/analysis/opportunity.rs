@@ -182,7 +182,10 @@ mod tests {
         let opportunities =
             detect_decay_opportunities_with_flow(&histories, 100.0, Some(&flow_pressure));
         assert_eq!(opportunities.len(), 1);
-        assert_eq!(opportunities[0].probable_cause, DecayCause::StakePoolDelisting);
+        assert_eq!(
+            opportunities[0].probable_cause,
+            DecayCause::StakePoolDelisting
+        );
         assert!(opportunities[0].estimated_orphan_stake_sol > 200.0);
     }
 }
