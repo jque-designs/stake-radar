@@ -32,20 +32,20 @@ impl SnapshotStore {
             .query_row(
                 "SELECT epoch FROM validator_snapshots ORDER BY epoch DESC LIMIT 1",
                 [],
-                |row| row.get::<_, u64>(0),
+                |row| row.get::<_, i64>(0),
             )
             .ok();
-        Ok(row)
+        Ok(row.map(i64_to_u64))
     }
 
     pub fn recent_epochs(&self, limit: u32) -> Result<Vec<u64>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT epoch FROM validator_snapshots ORDER BY epoch DESC LIMIT ?1",
         )?;
-        let rows = stmt.query_map(params![limit], |row| row.get::<_, u64>(0))?;
+        let rows = stmt.query_map(params![i64::from(limit)], |row| row.get::<_, i64>(0))?;
         let mut epochs = Vec::new();
         for item in rows {
-            epochs.push(item?);
+            epochs.push(i64_to_u64(item?));
         }
         Ok(epochs)
     }
@@ -88,19 +88,23 @@ impl SnapshotStore {
             )?;
 
             for snapshot in snapshots {
+                let epoch = u64_to_i64(snapshot.epoch);
+                let slot = u64_to_i64(snapshot.slot_captured);
+                let credits = u64_to_i64(snapshot.vote_credits_epoch);
+                let prior_credits = u64_to_i64(snapshot.vote_credits_prior_epoch);
                 stmt.execute(params![
-                    snapshot.vote_pubkey,
-                    snapshot.identity,
-                    snapshot.epoch,
-                    snapshot.slot_captured,
+                    &snapshot.vote_pubkey,
+                    &snapshot.identity,
+                    epoch,
+                    slot,
                     snapshot.activated_stake_sol,
                     snapshot.commission_pct,
-                    snapshot.vote_credits_epoch,
-                    snapshot.vote_credits_prior_epoch,
+                    credits,
+                    prior_credits,
                     snapshot.skip_rate,
                     i64::from(snapshot.delinquent),
-                    snapshot.version,
-                    snapshot.dc_location,
+                    &snapshot.version,
+                    &snapshot.dc_location,
                     i64::from(snapshot.superminority_member),
                 ])?;
                 inserted += 1;
@@ -141,7 +145,10 @@ impl SnapshotStore {
             ",
         )?;
 
-        let rows = stmt.query_map(params![epoch_from, epoch_to], row_to_snapshot)?;
+        let rows = stmt.query_map(
+            params![u64_to_i64(epoch_from), u64_to_i64(epoch_to)],
+            row_to_snapshot,
+        )?;
         let mut snapshots = Vec::new();
         for row in rows {
             snapshots.push(row?);
@@ -180,7 +187,10 @@ impl SnapshotStore {
             ORDER BY epoch ASC
             ",
         )?;
-        let rows = stmt.query_map(params![vote_pubkey, start, latest], row_to_snapshot)?;
+        let rows = stmt.query_map(
+            params![vote_pubkey, u64_to_i64(start), u64_to_i64(latest)],
+            row_to_snapshot,
+        )?;
         let mut snapshots = Vec::new();
         for row in rows {
             snapshots.push(row?);
@@ -193,16 +203,32 @@ fn row_to_snapshot(row: &rusqlite::Row<'_>) -> rusqlite::Result<ValidatorSnapsho
     Ok(ValidatorSnapshot {
         vote_pubkey: row.get(0)?,
         identity: row.get(1)?,
-        epoch: row.get(2)?,
-        slot_captured: row.get(3)?,
+        epoch: i64_to_u64(row.get(2)?),
+        slot_captured: i64_to_u64(row.get(3)?),
         activated_stake_sol: row.get(4)?,
         commission_pct: row.get(5)?,
-        vote_credits_epoch: row.get(6)?,
-        vote_credits_prior_epoch: row.get(7)?,
+        vote_credits_epoch: i64_to_u64(row.get(6)?),
+        vote_credits_prior_epoch: i64_to_u64(row.get(7)?),
         skip_rate: row.get(8)?,
         delinquent: row.get::<_, i64>(9)? != 0,
         version: row.get(10)?,
         dc_location: row.get(11)?,
         superminority_member: row.get::<_, i64>(12)? != 0,
     })
+}
+
+fn i64_to_u64(value: i64) -> u64 {
+    if value < 0 {
+        0
+    } else {
+        value as u64
+    }
+}
+
+fn u64_to_i64(value: u64) -> i64 {
+    if value > i64::MAX as u64 {
+        i64::MAX
+    } else {
+        value as i64
+    }
 }

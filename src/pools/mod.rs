@@ -20,7 +20,7 @@ pub async fn fetch_pool_scores(pool: StakePoolId, client: &Client) -> Result<Vec
     }
 }
 
-async fn fetch_json(client: &Client, url: &str) -> Result<Value> {
+pub(super) async fn fetch_json(client: &Client, url: &str) -> Result<Value> {
     let response = client
         .get(url)
         .send()
@@ -39,7 +39,7 @@ async fn fetch_json(client: &Client, url: &str) -> Result<Value> {
     Ok(json)
 }
 
-fn normalize_scores(value: &Value) -> Vec<PoolScore> {
+pub(super) fn normalize_scores(value: &Value) -> Vec<PoolScore> {
     let mut out = Vec::new();
     collect_scores_recursive(value, &mut out);
     out
@@ -119,6 +119,3 @@ fn as_f64(value: &Value) -> Option<f64> {
         _ => None,
     }
 }
-
-pub(super) use fetch_json as shared_fetch_json;
-pub(super) use normalize_scores as shared_normalize_scores;

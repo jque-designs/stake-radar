@@ -11,7 +11,7 @@ use stake_radar::analysis::opportunity::detect_decay_opportunities;
 use stake_radar::analysis::queue::infer_queue_position;
 use stake_radar::analysis::threat::analyze_threats;
 use stake_radar::config::{AppConfig, ConfigOverrides};
-use stake_radar::models::{StakePoolId, ThreatTier};
+use stake_radar::models::StakePoolId;
 use stake_radar::output;
 use stake_radar::pools;
 use stake_radar::rpc::RpcClient;

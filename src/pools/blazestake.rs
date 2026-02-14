@@ -4,8 +4,8 @@ use reqwest::Client;
 
 pub async fn fetch_scores(client: &Client) -> Result<Vec<PoolScore>> {
     let url = "https://stake.solblaze.org/api/v1/cls_validators";
-    let payload = super::shared_fetch_json(client, url).await?;
-    let mut scores = super::shared_normalize_scores(&payload);
+    let payload = super::fetch_json(client, url).await?;
+    let mut scores = super::normalize_scores(&payload);
     scores.sort_by(|a, b| b.score.total_cmp(&a.score));
     Ok(scores)
 }

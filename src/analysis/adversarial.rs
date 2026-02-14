@@ -76,7 +76,7 @@ fn detect_credit_manipulation(
     history: &[ValidatorSnapshot],
     first_detected_epoch: u64,
 ) -> Option<GamingSignal> {
-    let mut largest_jump = 0.0;
+    let mut largest_jump: f64 = 0.0;
     for pair in history.windows(2) {
         let prev = &pair[0];
         let curr = &pair[1];

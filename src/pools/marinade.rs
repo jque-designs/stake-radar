@@ -7,13 +7,13 @@ pub async fn fetch_scores(client: &Client) -> Result<Vec<PoolScore>> {
     let validators_url = "https://validators-api.marinade.finance/validators";
     let scoring_url = "https://scoring.marinade.finance/v1/scores";
 
-    let validators_json = super::shared_fetch_json(client, validators_url).await?;
-    let scoring_json = super::shared_fetch_json(client, scoring_url).await?;
+    let validators_json = super::fetch_json(client, validators_url).await?;
+    let scoring_json = super::fetch_json(client, scoring_url).await?;
 
     let mut merged: HashMap<String, PoolScore> = HashMap::new();
-    for score in super::shared_normalize_scores(&validators_json)
+    for score in super::normalize_scores(&validators_json)
         .into_iter()
-        .chain(super::shared_normalize_scores(&scoring_json))
+        .chain(super::normalize_scores(&scoring_json))
     {
         merged
             .entry(score.vote_pubkey.clone())
